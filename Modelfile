@@ -14,4 +14,3 @@ TEMPLATE """{{ if .System }}<start_of_turn>user
 PARAMETER temperature 0.7
 PARAMETER num_ctx 2048
 PARAMETER stop "<end_of_turn>"
-PARAMETER stop "<start_of_turn>"

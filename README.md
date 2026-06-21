@@ -70,7 +70,7 @@ This project fine-tunes the **Gemma 3 270M** model on [NIST AI RMF](https://www.
 | **Large knowledge base (>1M tokens)** | RAG |
 | **Learning specific style/format** | Fine-Tuning |
 | **Offline deployment** | Fine-Tuning |
-| **Fast inference required** | Fine-Tuning |
+| **Fast inference (short prompts, no retrieval)** | Fine-Tuning |
 | **Small, stable dataset** | Fine-Tuning |
 | **Teaching reasoning patterns** | Fine-Tuning |
 
@@ -80,7 +80,7 @@ For best results, combine both:
 1. **Fine-tune** the model to understand domain terminology, style, and reasoning patterns
 2. **Use RAG** to provide up-to-date facts and citations
 
-This project focuses on **fine-tuning**, but the resulting model can be integrated with RAG systems.
+This project focuses on **fine-tuning** to create a specialized model. RAG is optional and separate from the fine-tuning process—the trained model can be used standalone or integrated with RAG systems for enhanced capabilities.
 
 ## 📁 Project Structure
 
@@ -99,11 +99,14 @@ This project focuses on **fine-tuning**, but the resulting model can be integrat
 
 ## 🔧 Prerequisites
 
-- **Python 3.8+**
-- **CUDA-capable GPU** (recommended) or CPU
+- **Python 3.12** (tested and recommended; Python 3.14 has known compatibility issues with the `datasets` library)
+- **Apple Silicon (M1/M2/M3)** with reduced settings, **CUDA-capable GPU** (recommended), or **CPU**
+  - Note: This project uses Transformers + TRL, which works on Apple Silicon with MPS backend but requires reduced `--max-seq-length` (1024 or 512) and `--batch-size 1`
+  - Unsloth is not compatible with MacBook Pro M1 and is not used in this implementation
+  - CUDA GPUs provide the best training performance
 - **Hugging Face account** with API token
 - **Ollama** (for local model deployment)
-- **8GB+ RAM** (16GB+ recommended)
+- **16GB+ RAM** (recommended for M1 Macs; 8GB may work with further reduced settings)
 
 ## 🚀 Setup
 
@@ -177,8 +180,11 @@ python fine-tune.py
 This uses default settings:
 - Model: `google/gemma-3-270m-it`
 - Dataset: `dataset/nist-rmf.jsonl`
+- Output directory: `models/gemma-3-270m-nist`
+- Max sequence length: 2048
 - Epochs: 3
-- Batch size: 4
+- Batch size: 1
+- Gradient accumulation: 8
 - Learning rate: 5e-5
 
 #### Custom Configuration
@@ -187,11 +193,12 @@ This uses default settings:
 python fine-tune.py \
   --model google/gemma-3-270m-it \
   --dataset dataset/nist-rmf.jsonl \
+  --output-dir models/gemma-3-270m-nist \
+  --max-seq-length 2048 \
   --epochs 5 \
-  --batch-size 8 \
-  --learning-rate 1e-4 \
-  --max-length 2048 \
-  --output-dir models/gemma-3-270m-nist
+  --batch-size 1 \
+  --grad-accum 8 \
+  --learning-rate 1e-4
 ```
 
 #### View All Options
@@ -206,16 +213,16 @@ python fine-tune.py --help
 |----------|---------|-------------|
 | `--model` | `google/gemma-3-270m-it` | Hugging Face model name |
 | `--dataset` | `dataset/nist-rmf.jsonl` | Path to training dataset |
-| `--output-dir` | `models/<model-name>` | Output directory |
+| `--output-dir` | `models/gemma-3-270m-nist` | Output directory |
+| `--max-seq-length` | `2048` | Maximum sequence length in tokens |
 | `--epochs` | `3` | Number of training epochs |
-| `--batch-size` | `4` | Training batch size per device |
+| `--batch-size` | `1` | Training batch size per device |
+| `--grad-accum` | `8` | Gradient accumulation steps |
 | `--learning-rate` | `5e-5` | Learning rate |
-| `--max-length` | `2048` | Maximum sequence length |
 | `--logging-steps` | `10` | Steps between logging |
-| `--save-strategy` | `epoch` | Checkpoint save strategy |
-| `--attn-implementation` | `eager` | Attention implementation |
+| `--save-strategy` | `epoch` | Checkpoint save strategy (`no`, `steps`, `epoch`) |
+| `--save-steps` | `100` | Save checkpoint every N steps (if using `steps` strategy) |
 | `--hf-token` | (from .env) | Hugging Face API token |
-| `--device` | `auto` | Device for training |
 
 ### Training Output
 
@@ -224,7 +231,6 @@ The script will:
 2. Process the dataset with chat templates
 3. Train the model with progress logging
 4. Save the fine-tuned model to `models/` directory
-5. Generate a training log file: `fine-tune.log`
 
 **Example output:**
 ```
@@ -263,7 +269,7 @@ The project uses a JSONL dataset with NIST AI RMF questions and answers.
 **Example:**
 ```jsonl
 {"prompt": "Which function includes mitigation, transfer, avoidance, or acceptance of risk?", "response": "MANAGE"}
-{"prompt": "List a trustworthiness characteristic from the AI RMF.", "response": "Valid and reliable."}
+{"prompt": "List a trustworthiness characteristic from the AI RMF.", "response": "Valid and reliable. The AI RMF emphasizes that AI systems should produce consistent, accurate results and perform reliably across different conditions."}
 ```
 
 **Dataset location:** `dataset/nist-rmf.jsonl`
@@ -276,38 +282,73 @@ The project uses a JSONL dataset with NIST AI RMF questions and answers.
 
 ## 🚢 Model Deployment with Ollama
 
-After fine-tuning, deploy your model locally using Ollama.
+After fine-tuning, convert your model to GGUF format and deploy it locally using Ollama. The stack is simple: **GGUF + Modelfile + Ollama**.
+
+### What Files Are Produced After Training?
+
+After training completes, you'll have:
+1. **Training output directory** (`models/gemma-3-270m-nist/`): Contains the fine-tuned model in Hugging Face format (PyTorch weights, tokenizer, config)
+2. **GGUF file** (created in conversion step): Quantized model format for efficient inference with Ollama
+3. **Ollama model** (registered via `ollama create`): The GGUF file packaged with a Modelfile for easy deployment
 
 ### 1. Convert Model to GGUF Format
 
-First, convert your fine-tuned model to GGUF format (required for Ollama):
+Convert the trained model to GGUF for Ollama-compatible inference using `llama.cpp`'s conversion script:
 
 ```bash
-# Convert model (adjust paths as needed)
-python -m llama_cpp.convert \
-  --model-dir ./models/google/gemma-3-270m-nist \
-  --output-file ./models/gemma-3-270m-nist/gemma3-270m-nist.gguf
+# Clone llama.cpp (if you haven't already)
+git clone https://github.com/ggerganov/llama.cpp.git
+cd llama.cpp
+
+# Install Python dependencies for conversion
+pip install -r requirements.txt
+
+# Convert your fine-tuned model to GGUF
+python convert-hf-to-gguf.py \
+  ../models/gemma-3-270m-nist \
+  --outfile ../models/gemma-3-270m-nist/gemma3-270m-nist.gguf \
+  --outtype q8_0
+
+cd ..
 ```
+
+**Quantization options:**
+- `q8_0`: 8-bit quantization (recommended: good balance of size and quality)
+- `q4_0`: 4-bit quantization (smaller, faster, slight quality loss)
+- `q4_k_m`: 4-bit with k-quants (better quality than q4_0)
+- `f16`: 16-bit float (larger, highest quality)
+
+**Resources:**
+- [llama.cpp GGUF Conversion Guide](https://github.com/ggerganov/llama.cpp/discussions/2948)
+- [Hugging Face to GGUF Workflow](https://huggingface.co/docs/transformers/gguf)
+- [Ollama Model Import Guide](https://github.com/ollama/ollama/blob/main/docs/import.md)
 
 ### 2. Configure Modelfile
 
-The `Modelfile` in the project root contains the Ollama model configuration. Update the path to your converted GGUF model if needed. The file includes:
-- Model path reference
-- System prompt for NIST AI RMF specialization
-- Chat template configuration
-- Model parameters (temperature, context length, stop tokens)
+The `Modelfile` in the project root tells Ollama how to package and run your GGUF model.
+
+**Key components:**
+- `FROM`: Path to your GGUF file (update if your path differs)
+- `SYSTEM`: System prompt for NIST AI RMF specialization
+- `TEMPLATE`: Chat template matching Gemma's format
+- `PARAMETER num_ctx 2048`: Runtime context window (not a training parameter)
+
+**Note:** Ollama handles everything—you don't need `llama_cpp` or Python bindings unless you want to call the model directly from Python outside the Ollama service.
 
 ### 3. Create Ollama Model
 
-Run the provided script to create the Ollama model:
+Package your GGUF file with the Modelfile:
 
 ```bash
-./ollama_create.sh
+# Create the Ollama model
+ollama create gemma3-270m-nist -f Modelfile
 ```
 
-This script executes: `ollama create gemma3-270m-nist -f Modelfile`
+This registers your model with Ollama, making it available for inference.
 
 ### 4. Run the Model
+
+Start an interactive chat session:
 
 ```bash
 ollama run gemma3-270m-nist
@@ -326,15 +367,40 @@ The four functions of the NIST AI Risk Management Framework are:
 MANAGE - This function includes mitigation, transfer, avoidance, or acceptance of risk.
 ```
 
-### 5. Use via API
+### 5. Use via Ollama API
+
+Query the model programmatically:
 
 ```bash
+# Generate a response
 curl http://localhost:11434/api/generate -d '{
   "model": "gemma3-270m-nist",
   "prompt": "What is the GOVERN function?",
   "stream": false
 }'
+
+# Chat format
+curl http://localhost:11434/api/chat -d '{
+  "model": "gemma3-270m-nist",
+  "messages": [
+    {"role": "user", "content": "Explain the MAP function"}
+  ]
+}'
 ```
+
+**Python example (optional):**
+```python
+import requests
+
+response = requests.post('http://localhost:11434/api/generate', json={
+    'model': 'gemma3-270m-nist',
+    'prompt': 'What are trustworthiness characteristics?',
+    'stream': False
+})
+print(response.json()['response'])
+```
+
+**Note:** You only need `ollama-python` or similar libraries if you want Python bindings. The Ollama service itself handles all model serving.
 
 ## ⚙️ Configuration
 
@@ -350,19 +416,31 @@ Modify training parameters via command-line arguments or edit `fine-tune.py` def
 **Key parameters to tune:**
 - **Learning rate:** Start with 5e-5, adjust based on loss curves
 - **Epochs:** 3-5 for small datasets, 1-2 for large datasets
-- **Batch size:** Increase if you have more GPU memory
-- **Max length:** Match your dataset's typical sequence length
+- **Batch size:** Keep at 1 for M1 Macs; increase to 4-8 if you have CUDA GPU with sufficient memory
+- **Max sequence length:** Match your dataset's typical sequence length (reduce to 1024 or 512 on M1)
+- **Gradient accumulation:** Use `--grad-accum 8` to simulate larger batch sizes without increasing memory usage
 
 ## 🔍 Troubleshooting
+
+### MacBook Pro M1 Specific Notes
+
+- **MPS Backend:** The script automatically detects and uses Apple's Metal Performance Shaders (MPS) for GPU acceleration on M1/M2/M3 Macs
+- **Memory Management:** If you encounter out-of-memory errors, reduce `--max-seq-length` to 1024 or 512
+- **Batch Size:** Keep `--batch-size 1` for M1 Macs; use gradient accumulation (`--grad-accum 8`) to simulate larger effective batch sizes
+- **Unsloth:** This project does not use Unsloth, as it's not compatible with Apple Silicon
+- **Performance:** Training on M1 is slower than CUDA GPUs but works reliably with reduced settings
 
 ### Out of Memory (OOM) Errors
 
 ```bash
-# Reduce batch size
-python fine-tune.py --batch-size 2
+# Reduce max sequence length (most important on M1)
+python fine-tune.py --max-seq-length 1024
 
-# Reduce max length
-python fine-tune.py --max-length 256
+# Or even more aggressive for 8GB RAM
+python fine-tune.py --max-seq-length 512
+
+# Ensure batch size is 1 (default)
+python fine-tune.py --batch-size 1 --max-seq-length 1024
 ```
 
 ### Slow Training

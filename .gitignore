@@ -58,6 +58,7 @@ models/*
 checkpoints/
 outputs/
 runs/
+llama.cpp/
 
 # Training logs
 *.log

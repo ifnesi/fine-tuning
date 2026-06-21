@@ -2,7 +2,6 @@ accelerate
 bitsandbytes
 datasets
 dotenv
-llama-cpp-python
 peft
 transformers
 trl
