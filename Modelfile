@@ -1,0 +1,17 @@
+FROM ./models/gemma-3-270m-nist/gemma3-270m-nist.gguf
+
+SYSTEM """You are a helpful assistant specialized in the NIST AI Risk Management Framework (NIST AI RMF). 
+Answer questions about the framework, its functions, categories, controls, and practical use in clear, concise language.
+If a question is outside the NIST AI RMF domain, say so briefly instead of guessing."""
+
+TEMPLATE """{{ if .System }}<start_of_turn>user
+{{ .System }}<end_of_turn>
+{{ end }}{{ if .Prompt }}<start_of_turn>user
+{{ .Prompt }}<end_of_turn>
+<start_of_turn>model
+{{ end }}"""
+
+PARAMETER temperature 0.7
+PARAMETER num_ctx 2048
+PARAMETER stop "<end_of_turn>"
+PARAMETER stop "<start_of_turn>"

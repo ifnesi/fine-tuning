@@ -1,0 +1,7 @@
+accelerate
+bitsandbytes
+datasets
+dotenv
+peft
+transformers
+trl
