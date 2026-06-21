@@ -17,7 +17,7 @@ A comprehensive project for fine-tuning Large Language Models (LLMs) on the NIST
 
 ## 🎯 Overview
 
-This project fine-tunes the **Gemma 3 270M** model on NIST AI RMF data to create a specialized assistant that can:
+This project fine-tunes the **Gemma 3 270M** model on [NIST AI RMF](https://www.nist.gov/itl/ai-risk-management-framework) data to create a specialized assistant that can:
 - Answer questions about the NIST AI Risk Management Framework
 - Classify AI RMF functions (MAP, GOVERN, MEASURE, MANAGE)
 - Explain trustworthiness characteristics
@@ -110,7 +110,7 @@ This project focuses on **fine-tuning**, but the resulting model can be integrat
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone git@github.com:ifnesi/fine-tuning.git
 cd fine-tuning
 ```
 
@@ -283,12 +283,9 @@ After fine-tuning, deploy your model locally using Ollama.
 First, convert your fine-tuned model to GGUF format (required for Ollama):
 
 ```bash
-# Install llama.cpp converter
-pip install llama-cpp-python
-
 # Convert model (adjust paths as needed)
 python -m llama_cpp.convert \
-  --model-dir ./models/google/gemma-3-270m-it \
+  --model-dir ./models/google/gemma-3-270m-nist \
   --output-file ./models/gemma-3-270m-nist/gemma3-270m-nist.gguf
 ```
 
