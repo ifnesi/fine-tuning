@@ -1,16 +1,25 @@
+# Run `ollama create` from the project root:
+#   ollama create gemma3-270m-nist -f Modelfile
 FROM ./models/gemma-3-270m-nist/gemma3-270m-nist.gguf
 
-SYSTEM """You are a helpful assistant specialized in the NIST AI Risk Management Framework (NIST AI RMF). 
-Answer questions about the framework, its functions, categories, controls, and practical use in clear, concise language.
-If a question is outside the NIST AI RMF domain, say so briefly instead of guessing."""
+SYSTEM """You are a helpful assistant specialized in the NIST AI Risk Management Framework (AI RMF 1.0).
+Answer questions about the framework's four functions (GOVERN, MAP, MEASURE, MANAGE), their categories and subcategories, trustworthiness characteristics, AI lifecycle roles, and risk management practices.
+Be concise and precise. If a question is outside the NIST AI RMF domain, say so briefly instead of guessing."""
 
-TEMPLATE """{{ if .System }}<start_of_turn>user
-{{ .System }}<end_of_turn>
-{{ end }}{{ if .Prompt }}<start_of_turn>user
-{{ .Prompt }}<end_of_turn>
+# Gemma chat format: system content is prepended into the first user turn.
+# {{ .System }} is included only when a system prompt is set (it is, above).
+TEMPLATE """<start_of_turn>user
+{{ if .System }}{{ .System }}
+
+{{ end }}{{ .Prompt }}<end_of_turn>
 <start_of_turn>model
-{{ end }}"""
+{{ .Response }}<end_of_turn>
+"""
 
 PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER top_k 40
 PARAMETER num_ctx 2048
+PARAMETER repeat_penalty 1.1
 PARAMETER stop "<end_of_turn>"
+PARAMETER stop "<start_of_turn>"

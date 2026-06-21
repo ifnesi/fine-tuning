@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
 """
-Fine-tune Gemma 3 270M on a MacBook Pro M1 using Transformers + TRL.
-
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+Fine-tune Gemma 3 270M on a MacBook Pro M1 using Transformers + TRL + LoRA.
 
 Example:
     python fine-tune.py \
         --model google/gemma-3-270m-it \
         --dataset dataset/nist-rmf.jsonl \
         --output-dir models/gemma-3-270m-nist \
-        --max-seq-length 2048
+        --max-seq-length 1024
 """
 
 import os
@@ -27,6 +22,7 @@ from functools import partial
 from trl import SFTConfig, SFTTrainer
 from dotenv import load_dotenv
 from datasets import load_dataset
+from peft import LoraConfig, get_peft_model, TaskType
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
@@ -40,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Fine-tune Gemma 3 270M on Apple Silicon with Transformers + TRL.",
+        description="Fine-tune Gemma 3 270M on Apple Silicon with Transformers + TRL + LoRA.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -64,8 +60,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-seq-length",
         type=int,
-        default=2048,
-        help="Maximum training sequence length in tokens. On M1, reduce to 1024 or 512 if you hit out-of-memory errors.",
+        default=1024,
+        help="Maximum training sequence length in tokens. On M1, use 512-1024 to avoid OOM.",
     )
     parser.add_argument(
         "--epochs",
@@ -77,7 +73,7 @@ def parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=1,
-        help="Per-device training batch size. Batch size 1 is safer on Apple Silicon.",
+        help="Per-device training batch size. Keep at 1 for Apple Silicon.",
     )
     parser.add_argument(
         "--grad-accum",
@@ -88,8 +84,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--learning-rate",
         type=float,
-        default=5e-5,
-        help="Learning rate for supervised fine-tuning.",
+        default=2e-4,
+        help="Learning rate for supervised fine-tuning. Higher values (1e-4 to 3e-4) work well with LoRA.",
+    )
+    parser.add_argument(
+        "--lora-r",
+        type=int,
+        default=16,
+        help="LoRA rank. Higher values increase capacity but use more memory.",
+    )
+    parser.add_argument(
+        "--lora-alpha",
+        type=int,
+        default=32,
+        help="LoRA scaling factor. Typically 2x lora-r.",
+    )
+    parser.add_argument(
+        "--lora-dropout",
+        type=float,
+        default=0.05,
+        help="LoRA dropout probability.",
+    )
+    parser.add_argument(
+        "--no-lora",
+        action="store_true",
+        default=False,
+        help="Disable LoRA and do full fine-tuning (much slower, higher memory).",
     )
     parser.add_argument(
         "--logging-steps",
@@ -184,6 +204,32 @@ def load_model_and_tokenizer(model_name: str, hf_token: str | None, device: str)
     return model, tokenizer
 
 
+def apply_lora(model, lora_r: int, lora_alpha: int, lora_dropout: float):
+    lora_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=lora_dropout,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        bias="none",
+    )
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
+    return model
+
+
+def merge_and_save(model, tokenizer, output_dir: str):
+    """Merge LoRA adapter weights into the base model and save full weights for GGUF conversion."""
+    logger.info("Merging LoRA adapter into base model...")
+    merged_model = model.merge_and_unload()
+    merged_dir = output_dir + "-merged"
+    logger.info("Saving merged model to %s", merged_dir)
+    merged_model.save_pretrained(merged_dir)
+    tokenizer.save_pretrained(merged_dir)
+    logger.info("Merged model saved — use this directory for GGUF conversion:")
+    logger.info("  cd llama.cpp && python3 convert_hf_to_gguf.py ../%s --outtype q8_0", merged_dir)
+
+
 def main() -> None:
     args = parse_args()
     hf_token = load_environment(args.hf_token)
@@ -195,14 +241,18 @@ def main() -> None:
     logger.info("Dataset: %s", args.dataset)
     logger.info("Device: %s", device)
     logger.info("Max sequence length: %s", args.max_seq_length)
+    logger.info("LoRA: %s", "disabled" if args.no_lora else f"r={args.lora_r}, alpha={args.lora_alpha}")
     logger.info("=" * 80)
 
     if device == "mps":
         logger.info("Using Apple Silicon MPS backend")
-        logger.info("If you hit memory errors, reduce --max-seq-length to 1024 or 512")
-        logger.info("Also consider lowering epochs or keeping batch size at 1")
+        logger.info("If you hit memory errors, reduce --max-seq-length to 512")
 
     model, tokenizer = load_model_and_tokenizer(args.model, hf_token, device)
+
+    if not args.no_lora:
+        model = apply_lora(model, args.lora_r, args.lora_alpha, args.lora_dropout)
+
     dataset = prepare_dataset(args.dataset, tokenizer)
 
     training_args = SFTConfig(
@@ -235,6 +285,9 @@ def main() -> None:
     logger.info("Saving model to %s", args.output_dir)
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
+
+    if not args.no_lora:
+        merge_and_save(trainer.model, tokenizer, args.output_dir)
 
     logger.info("Done")
 

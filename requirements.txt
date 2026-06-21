@@ -1,7 +1,9 @@
 accelerate
 bitsandbytes
 datasets
-dotenv
+python-dotenv
 peft
 transformers
 trl
+# torchvision is intentionally excluded — incompatible with torch 2.11+ on M1
+# and not needed for text-only fine-tuning

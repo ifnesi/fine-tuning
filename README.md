@@ -86,7 +86,7 @@ This project focuses on **fine-tuning** to create a specialized model. RAG is op
 
 ```
 .
-├── fine-tune.py           # Main fine-tuning script with argparse
+├── fine-tune.py           # Fine-tuning script (trains + merges LoRA automatically)
 ├── requirements.txt       # Python dependencies
 ├── .env_example          # Environment variables template
 ├── .gitignore            # Git ignore patterns
@@ -95,6 +95,8 @@ This project focuses on **fine-tuning** to create a specialized model. RAG is op
 ├── dataset/
 │   └── nist-rmf.jsonl    # Training dataset (NIST AI RMF Q&A)
 └── models/               # Output directory for fine-tuned models
+    ├── gemma-3-270m-nist/         # LoRA adapter weights (saved by trainer)
+    └── gemma-3-270m-nist-merged/  # Merged full model (ready for GGUF conversion)
 ```
 
 ## 🔧 Prerequisites
@@ -120,7 +122,7 @@ cd fine-tuning
 ### 2. Create Virtual Environment
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
@@ -134,7 +136,7 @@ pip install -r requirements.txt
 - `accelerate` - Distributed training support
 - `bitsandbytes` - Quantization and optimization
 - `datasets` - Dataset loading and processing
-- `dotenv` - Environment variable management
+- `python-dotenv` - Environment variable management
 - `peft` - Parameter-Efficient Fine-Tuning (LoRA)
 - `transformers` - Hugging Face model library
 - `trl` - Transformer Reinforcement Learning (SFT)
@@ -181,11 +183,12 @@ This uses default settings:
 - Model: `google/gemma-3-270m-it`
 - Dataset: `dataset/nist-rmf.jsonl`
 - Output directory: `models/gemma-3-270m-nist`
-- Max sequence length: 2048
+- Max sequence length: 1024 (safe for M1)
 - Epochs: 3
 - Batch size: 1
 - Gradient accumulation: 8
-- Learning rate: 5e-5
+- Learning rate: 2e-4
+- LoRA: enabled (r=16, alpha=32) — trains ~1% of parameters
 
 #### Custom Configuration
 
@@ -194,11 +197,18 @@ python fine-tune.py \
   --model google/gemma-3-270m-it \
   --dataset dataset/nist-rmf.jsonl \
   --output-dir models/gemma-3-270m-nist \
-  --max-seq-length 2048 \
+  --max-seq-length 1024 \
   --epochs 5 \
   --batch-size 1 \
   --grad-accum 8 \
-  --learning-rate 1e-4
+  --learning-rate 2e-4 \
+  --lora-r 16 \
+  --lora-alpha 32
+```
+
+To disable LoRA and do full fine-tuning (slower, higher memory):
+```bash
+python fine-tune.py --no-lora --learning-rate 5e-5
 ```
 
 #### View All Options
@@ -214,11 +224,15 @@ python fine-tune.py --help
 | `--model` | `google/gemma-3-270m-it` | Hugging Face model name |
 | `--dataset` | `dataset/nist-rmf.jsonl` | Path to training dataset |
 | `--output-dir` | `models/gemma-3-270m-nist` | Output directory |
-| `--max-seq-length` | `2048` | Maximum sequence length in tokens |
+| `--max-seq-length` | `1024` | Maximum sequence length in tokens |
 | `--epochs` | `3` | Number of training epochs |
 | `--batch-size` | `1` | Training batch size per device |
 | `--grad-accum` | `8` | Gradient accumulation steps |
-| `--learning-rate` | `5e-5` | Learning rate |
+| `--learning-rate` | `2e-4` | Learning rate |
+| `--lora-r` | `16` | LoRA rank |
+| `--lora-alpha` | `32` | LoRA scaling factor |
+| `--lora-dropout` | `0.05` | LoRA dropout |
+| `--no-lora` | `False` | Disable LoRA, use full fine-tuning |
 | `--logging-steps` | `10` | Steps between logging |
 | `--save-strategy` | `epoch` | Checkpoint save strategy (`no`, `steps`, `epoch`) |
 | `--save-steps` | `100` | Save checkpoint every N steps (if using `steps` strategy) |
@@ -287,13 +301,22 @@ After fine-tuning, convert your model to GGUF format and deploy it locally using
 ### What Files Are Produced After Training?
 
 After training completes, you'll have:
-1. **Training output directory** (`models/gemma-3-270m-nist/`): Contains the fine-tuned model in Hugging Face format (PyTorch weights, tokenizer, config)
-2. **GGUF file** (created in conversion step): Quantized model format for efficient inference with Ollama
-3. **Ollama model** (registered via `ollama create`): The GGUF file packaged with a Modelfile for easy deployment
+1. **Training output directory** (`models/gemma-3-270m-nist/`): Contains LoRA adapter weights only (`adapter_model.safetensors`, `adapter_config.json`) — **not** full model weights
+2. **Merged model** (created in step 1 below): Full model with LoRA weights merged in, ready for GGUF conversion
+3. **GGUF file** (created in step 2): Quantized model format for efficient inference with Ollama
+4. **Ollama model** (registered via `ollama create`): The GGUF file packaged with a Modelfile for easy deployment
 
-### 1. Convert Model to GGUF Format
+> **Why merge?** LoRA training saves only the small adapter delta, not the full model weights. `llama.cpp` requires a complete model to convert to GGUF. The merge step combines the adapter with the original base model.
 
-Convert the trained model to GGUF for Ollama-compatible inference using `llama.cpp`'s conversion script:
+### 1. Merged Model (automatic)
+
+When LoRA is enabled (default), `fine-tune.py` automatically merges the adapter into the base model at the end of training and saves the result to `models/gemma-3-270m-nist-merged/`. No extra step needed.
+
+> If you trained with `--no-lora`, the output directory already contains full weights — use it directly in the next step.
+
+### 2. Convert Model to GGUF Format
+
+Convert the merged model to GGUF for Ollama-compatible inference using `llama.cpp`'s conversion script:
 
 ```bash
 # Clone llama.cpp (if you haven't already)
@@ -303,9 +326,9 @@ cd llama.cpp
 # Install Python dependencies for conversion
 pip install -r requirements.txt
 
-# Convert your fine-tuned model to GGUF
-python convert-hf-to-gguf.py \
-  ../models/gemma-3-270m-nist \
+# Convert the MERGED model to GGUF (not the adapter directory)
+python convert_hf_to_gguf.py \
+  ../models/gemma-3-270m-nist-merged \
   --outfile ../models/gemma-3-270m-nist/gemma3-270m-nist.gguf \
   --outtype q8_0
 
@@ -425,22 +448,23 @@ Modify training parameters via command-line arguments or edit `fine-tune.py` def
 ### MacBook Pro M1 Specific Notes
 
 - **MPS Backend:** The script automatically detects and uses Apple's Metal Performance Shaders (MPS) for GPU acceleration on M1/M2/M3 Macs
-- **Memory Management:** If you encounter out-of-memory errors, reduce `--max-seq-length` to 1024 or 512
+- **LoRA:** Enabled by default — trains only ~1% of parameters, dramatically reducing memory and training time on M1
+- **Memory Management:** If you encounter out-of-memory errors, reduce `--max-seq-length` to 512
 - **Batch Size:** Keep `--batch-size 1` for M1 Macs; use gradient accumulation (`--grad-accum 8`) to simulate larger effective batch sizes
 - **Unsloth:** This project does not use Unsloth, as it's not compatible with Apple Silicon
-- **Performance:** Training on M1 is slower than CUDA GPUs but works reliably with reduced settings
+- **Performance:** Training on M1 is slower than CUDA GPUs but works reliably with LoRA + reduced sequence length
 
 ### Out of Memory (OOM) Errors
 
 ```bash
-# Reduce max sequence length (most important on M1)
-python fine-tune.py --max-seq-length 1024
-
-# Or even more aggressive for 8GB RAM
+# LoRA is already enabled by default — try reducing sequence length first
 python fine-tune.py --max-seq-length 512
 
 # Ensure batch size is 1 (default)
-python fine-tune.py --batch-size 1 --max-seq-length 1024
+python fine-tune.py --batch-size 1 --max-seq-length 512
+
+# Lower LoRA rank to further reduce memory
+python fine-tune.py --lora-r 8 --lora-alpha 16
 ```
 
 ### Slow Training
