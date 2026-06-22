@@ -119,8 +119,8 @@ def main() -> None:
     parser.add_argument(
         '--model',
         type=str,
-        default='gemma-3-270m-it',
-        help='Model name to test (default: gemma-3-270m-it)'
+        default='gemma-3-270m-nist',
+        help='Model name to test (default: gemma-3-270m-nist)'
     )
     parser.add_argument(
         '--timeout',
@@ -131,7 +131,7 @@ def main() -> None:
     parser.add_argument(
         '--questions',
         type=str,
-        default=os.path.join('dataset', 'test-questions.jsonl'),
+        default=os.path.join('dataset', 'test-nist-rmf.jsonl'),
         help='Path to questions JSONL file (default: dataset/test-nist-rmf.jsonl)'
     )
     parser.add_argument(
@@ -158,7 +158,23 @@ def main() -> None:
     
     passed = sum(1 for r in results if r["passed"])
     print(f"\n{'='*60}")
-    
+
+    by_kind: dict[str, dict] = {}
+    for r in results:
+        k = r["kind"]
+        if k not in by_kind:
+            by_kind[k] = {"total": 0, "passed": 0}
+        by_kind[k]["total"] += 1
+        if r["passed"]:
+            by_kind[k]["passed"] += 1
+    kind_accuracy = {
+        k: round(v["passed"] / v["total"], 3)
+        for k, v in by_kind.items()
+    }
+
+    latencies = [r["latency_seconds"] for r in results if r["error"] is None]
+    avg_latency = round(sum(latencies) / len(latencies), 3) if latencies else None
+
     summary = {
         "model": args.model,
         "ollama_url": args.ollama_url,
@@ -167,6 +183,8 @@ def main() -> None:
         "passed": passed,
         "failed": len(results) - passed,
         "accuracy": round(passed / len(results), 3) if results else 0.0,
+        "accuracy_by_kind": kind_accuracy,
+        "avg_latency_seconds": avg_latency,
         "results": results,
     }
     
@@ -180,6 +198,12 @@ def main() -> None:
     print(f"Passed: {summary['passed']}")
     print(f"Failed: {summary['failed']}")
     print(f"Accuracy: {summary['accuracy']:.1%}")
+    for kind, acc in summary["accuracy_by_kind"].items():
+        kind_total = by_kind[kind]["total"]
+        kind_passed = by_kind[kind]["passed"]
+        print(f"  {kind}: {acc:.1%} ({kind_passed}/{kind_total})")
+    if avg_latency is not None:
+        print(f"Avg latency: {avg_latency:.3f}s")
     print(f"\nResults saved to: {args.output}")
 
 
