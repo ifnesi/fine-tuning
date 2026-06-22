@@ -59,6 +59,7 @@ checkpoints/
 outputs/
 runs/
 llama.cpp/
+ollama_inference_test_results.json
 
 # Training logs
 *.log

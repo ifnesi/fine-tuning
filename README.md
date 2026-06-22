@@ -87,13 +87,15 @@ This project focuses on **fine-tuning** to create a specialized model. RAG is op
 ```
 .
 ├── fine-tune.py           # Fine-tuning script (trains + merges LoRA automatically)
+├── test-fine-tune.py      # Model testing script with real-time feedback
 ├── requirements.txt       # Python dependencies
 ├── .env_example          # Environment variables template
 ├── .gitignore            # Git ignore patterns
 ├── Modelfile             # Ollama model configuration
 ├── ollama_create.sh      # Script to create Ollama model
 ├── dataset/
-│   └── nist-rmf.jsonl    # Training dataset (NIST AI RMF Q&A)
+│   ├── nist-rmf.jsonl    # Training dataset (NIST AI RMF Q&A)
+│   └── test-questions.jsonl  # Test dataset (100 questions for evaluation)
 └── models/               # Output directory for fine-tuned models
     ├── gemma-3-270m-nist/         # LoRA adapter weights (saved by trainer)
     └── gemma-3-270m-nist-merged/  # Merged full model (ready for GGUF conversion)
@@ -390,7 +392,111 @@ The four functions of the NIST AI Risk Management Framework are:
 MANAGE - This function includes mitigation, transfer, avoidance, or acceptance of risk.
 ```
 
-### 5. Use via Ollama API
+### 5. Test the Fine-Tuned Model
+
+After deploying your model with Ollama, you can test its performance using the included test script.
+
+#### Test Dataset
+
+The project includes a comprehensive test dataset with 100 questions:
+- **Location:** `dataset/test-questions.jsonl`
+- **Format:** JSONL with fields: `id`, `kind`, `expected`, `prompt`
+- **Question types:**
+  - 55 True/False questions
+  - 45 Multiple choice questions (A, B, C, or D)
+- **Content:** All questions based on NIST AI RMF concepts
+
+**Example test questions:**
+```jsonl
+{"id": "tf_1", "kind": "true_false", "expected": "TRUE", "prompt": "Answer with exactly one word: TRUE or FALSE. No explanation.\n\nThe NIST AI RMF emphasizes managing security and privacy risk as an ongoing process throughout the system lifecycle.\n"}
+{"id": "mcq_1", "kind": "multiple_choice", "expected": "D", "prompt": "Choose one option and answer with exactly one letter: A, B, C, or D. No explanation.\n\nWhich RMF function is primarily responsible for monitoring deployed AI systems?\nA. GOVERN\nB. MAP\nC. MEASURE\nD. MANAGE\n"}
+```
+
+#### Running Tests
+
+Test your fine-tuned model with real-time feedback:
+
+```bash
+# Basic usage (uses defaults)
+python test-fine-tune.py
+
+# Custom configuration
+python test-fine-tune.py \
+  --model gemma3-270m-nist \
+  --questions dataset/test-nist-rmf.jsonl \
+  --ollama-url http://localhost:11434/api/generate \
+  --timeout 120
+```
+
+**Available arguments:**
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--model` | `gemma-3-270m-nist` | Model name to test |
+| `--questions` | `dataset/test-nist-rmf.jsonl` | Path to test questions file |
+| `--ollama-url` | `http://localhost:11434/api/generate` | Ollama API endpoint |
+| `--timeout` | `120` | Request timeout in seconds |
+| `--output` | `ollama_inference_test_results.json` | Output file for results |
+
+#### Test Output
+
+The script provides real-time feedback as it runs:
+
+```
+Loaded 100 test questions from dataset/test-questions.jsonl
+Testing model: gemma3-270m-nist
+============================================================
+
+[1/100] Testing tf_1... ✓ CORRECT [tf_1] Expected: TRUE, Got: TRUE (1.23s)
+[2/100] Testing tf_2... ✗ INCORRECT [tf_2] Expected: FALSE, Got: TRUE (0.98s)
+[3/100] Testing mcq_1... ✓ CORRECT [mcq_1] Expected: D, Got: D (1.45s)
+...
+
+============================================================
+
+Test Results:
+Total: 100
+Passed: 87
+Failed: 13
+Accuracy: 87.0%
+
+Results saved to: ollama_inference_test_results.json
+```
+
+#### Interpreting Results
+
+The test results JSON file contains:
+```json
+{
+  "model": "gemma3-270m-nist",
+  "ollama_url": "http://localhost:11434/api/generate",
+  "questions_file": "dataset/test-questions.jsonl",
+  "total": 100,
+  "passed": 87,
+  "failed": 13,
+  "accuracy": 0.87,
+  "results": [
+    {
+      "id": "tf_1",
+      "kind": "true_false",
+      "expected": "TRUE",
+      "raw_response": "TRUE",
+      "normalized_response": "TRUE",
+      "passed": true,
+      "latency_seconds": 1.234,
+      "error": null
+    }
+  ]
+}
+```
+
+Use this data to:
+- Compare performance between original and fine tuned models
+- Identify question types where the model struggles
+- Track improvements after additional fine-tuning
+- Analyze response times and optimize inference
+
+### 6. Use via Ollama API
 
 Query the model programmatically:
 

@@ -3,6 +3,7 @@ bitsandbytes
 datasets
 python-dotenv
 peft
+requests
 transformers
 trl
 # torchvision is intentionally excluded — incompatible with torch 2.11+ on M1
